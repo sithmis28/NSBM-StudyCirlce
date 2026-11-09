@@ -1,381 +1,260 @@
-
 <?php
-$admin_page_title = "Overview Dashboard";
-require_once __DIR__ . '/includes/admin_header.php';
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../includes/functions.php';
 
-$total_news = $pdo->query("SELECT COUNT(*) FROM news WHERE status = 'published'")->fetchColumn();
-$total_views = $pdo->query("SELECT COALESCE(SUM(views), 0) FROM news")->fetchColumn();
-$total_students = $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'student'")->fetchColumn();
-$total_comments = $pdo->query("SELECT COUNT(*) FROM comments")->fetchColumn();
-$pending_submissions = $pdo->query("SELECT COUNT(*) FROM article_submissions WHERE status = 'pending'")->fetchColumn();
-$pending_comments = $pdo->query("SELECT COUNT(*) FROM comments WHERE status = 'pending'")->fetchColumn();
-
-$cat_chart_stmt = $pdo->query("
-    SELECT c.name, COUNT(n.id) AS article_count, COALESCE(SUM(n.views), 0) AS total_views
-    FROM categories c
-    LEFT JOIN news n ON n.category_id = c.id AND n.status = 'published'
-    GROUP BY c.id, c.name
-");
-$cat_data = $cat_chart_stmt->fetchAll();
-$chart_labels = [];
-$chart_views = [];
-$chart_articles = [];
-foreach ($cat_data as $row) {
-    $chart_labels[] = $row['name'];
-    $chart_views[] = (int)$row['total_views'];
-    $chart_articles[] = (int)$row['article_count'];
+if (!is_logged_in()) {
+    set_flash('danger', 'Please login to access your student dashboard.');
+    header("Location: ../login.php");
+    exit;
 }
 
-$pending_list_stmt = $pdo->query("
-    SELECT a.*, c.name AS category_name, u.name AS student_name, u.student_id
+$user = current_user();
+$user_id = $user['id'];
+
+$bookmark_count = $pdo->prepare("SELECT COUNT(*) FROM bookmarks WHERE user_id = ?");
+$bookmark_count->execute([$user_id]);
+$total_bookmarks = $bookmark_count->fetchColumn();
+
+$sub_count = $pdo->prepare("SELECT COUNT(*) FROM subscriptions WHERE user_id = ?");
+$sub_count->execute([$user_id]);
+$total_subscriptions = $sub_count->fetchColumn();
+
+$submission_count = $pdo->prepare("SELECT COUNT(*) FROM article_submissions WHERE user_id = ?");
+$submission_count->execute([$user_id]);
+$total_submissions = $submission_count->fetchColumn();
+
+$feed_stmt = $pdo->prepare("
+    SELECT n.*, c.name AS category_name, c.slug AS category_slug, u.name AS author_name
+    FROM news n
+    JOIN categories c ON n.category_id = c.id
+    JOIN subscriptions s ON s.category_id = c.id
+    LEFT JOIN users u ON n.author_id = u.id
+    WHERE s.user_id = ? AND n.status = 'published'
+    ORDER BY n.created_at DESC
+    LIMIT 6
+");
+$feed_stmt->execute([$user_id]);
+$personalized_feed = $feed_stmt->fetchAll();
+
+$my_submissions_stmt = $pdo->prepare("
+    SELECT a.*, c.name AS category_name
     FROM article_submissions a
     JOIN categories c ON a.category_id = c.id
-    JOIN users u ON a.user_id = u.id
-    WHERE a.status = 'pending'
+    WHERE a.user_id = ?
     ORDER BY a.submitted_at DESC
-    LIMIT 5
+    LIMIT 3
 ");
-$pending_list = $pending_list_stmt->fetchAll();
+$my_submissions_stmt->execute([$user_id]);
+$recent_submissions = $my_submissions_stmt->fetchAll();
 
-$top_news_stmt = $pdo->query("
-    SELECT n.*, c.name AS category_name
-    FROM news n
-    LEFT JOIN categories c ON n.category_id = c.id
-    WHERE n.status = 'published'
-    ORDER BY n.views DESC
-    LIMIT 5
-");
-$top_news = $top_news_stmt->fetchAll();
+$page_title = "Student Dashboard";
+require_once __DIR__ . '/../includes/header.php';
 ?>
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h2 class="fw-bold text-navy mb-1">Administrative Overview</h2>
-        <p class="text-muted small mb-0">System health, readership traffic, student submissions, and moderation queue.</p>
-    </div>
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-        <a href="news/create.php" class="btn btn-nsbm rounded-pill px-4 shadow-sm">
-            <i class="bi bi-plus-circle me-1"></i> New Article
-        </a>
-    </div>
-</div>
+<div class="container py-4">
 
-<div class="row g-4 mb-4">
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-4 p-3 bg-white border-start border-4 border-success admin-card-stat">
-            <div class="d-flex align-items-center justify-content-between">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb small">
+            <li class="breadcrumb-item"><a href="../index.php" class="text-decoration-none">Home</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Student Dashboard</li>
+        </ol>
+    </nav>
+
+    <?php display_flash(); ?>
+
+    <div class="p-4 p-md-5 rounded-4 border shadow-sm mb-4 dashboard-welcome-banner" style="background: linear-gradient(135deg, #2563A6 0%, #2E7D5B 100%); color: white;">
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <div class="d-flex align-items-center gap-3">
+                <div class="rounded-circle d-flex align-items-center justify-content-center shadow dashboard-avatar-circle" style="width: 64px; height: 64px; font-size: 1.8rem; font-weight: bold; background-color: #ffffff; color: #2E7D5B;">
+                    <i class="bi bi-person-circle"></i>
+                </div>
                 <div>
-                    <span class="text-muted small fw-semibold text-uppercase">Published News</span>
-                    <h3 class="fw-bold text-navy mb-0" data-dashboard-stat="publishedNews"><?php echo number_format($total_news); ?></h3>
-                </div>
-                <div class="bg-success-subtle text-success p-3 rounded-circle">
-                    <i class="bi bi-newspaper fs-4"></i>
-                </div>
-            </div>
-            <small class="text-muted mt-2 d-block"><i class="bi bi-check2-circle text-success me-1"></i> Live on Campus Desk</small>
-        </div>
-    </div>
-
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-4 p-3 bg-white border-start border-4 border-primary admin-card-stat">
-            <div class="d-flex align-items-center justify-content-between">
-                <div>
-                    <span class="text-muted small fw-semibold text-uppercase">Total Views</span>
-                    <h3 class="fw-bold text-navy mb-0" data-dashboard-stat="totalViews"><?php echo number_format($total_views); ?></h3>
-                </div>
-                <div class="bg-primary-subtle text-primary p-3 rounded-circle">
-                    <i class="bi bi-eye-fill fs-4"></i>
-                </div>
-            </div>
-            <small class="text-muted mt-2 d-block"><i class="bi bi-graph-up text-primary me-1"></i> Live Views Count</small>
-        </div>
-    </div>
-
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-4 p-3 bg-white border-start border-4 border-warning admin-card-stat">
-            <div class="d-flex align-items-center justify-content-between">
-                <div>
-                    <span class="text-muted small fw-semibold text-uppercase">Pending Submissions</span>
-                    <h3 class="fw-bold text-navy mb-0" data-dashboard-stat="pendingSubmissions"><?php echo number_format($pending_submissions); ?></h3>
-                </div>
-                <div class="bg-warning-subtle text-warning p-3 rounded-circle">
-                    <i class="bi bi-hourglass-split fs-4"></i>
-                </div>
-            </div>
-            <small class="text-muted mt-2 d-block">
-                <a href="submissions/index.php" class="text-warning-emphasis text-decoration-none fw-semibold">Review submissions &rarr;</a>
-            </small>
-        </div>
-    </div>
-
-    <div class="col-sm-6 col-xl-3">
-        <div class="card border-0 shadow-sm rounded-4 p-3 bg-white border-start border-4 border-info admin-card-stat">
-            <div class="d-flex align-items-center justify-content-between">
-                <div>
-                    <span class="text-muted small fw-semibold text-uppercase">Registered Students</span>
-                    <h3 class="fw-bold text-navy mb-0" data-dashboard-stat="registeredStudents"><?php echo number_format($total_students); ?></h3>
-                </div>
-                <div class="bg-info-subtle text-info p-3 rounded-circle">
-                    <i class="bi bi-people-fill fs-4"></i>
-                </div>
-            </div>
-            <small class="text-muted mt-2 d-block"><i class="bi bi-person-badge text-info me-1"></i> Across All 4 Faculties</small>
-        </div>
-    </div>
-</div>
-
-<div class="row g-4 mb-4">
-
-    <div class="col-lg-8">
-        <div class="card border-0 shadow-sm rounded-4 p-4 bg-white h-100">
-            <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
-                <h5 class="fw-bold text-navy mb-0">
-                    <i class="bi bi-bar-chart-line text-success me-2"></i> Category Engagement & Traffic
-                </h5>
-                <a href="reports/index.php" class="small text-muted text-decoration-none">Detailed Report &rarr;</a>
-            </div>
-            <div style="height: 280px; position: relative;">
-                <canvas id="categoryChart"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-4">
-        <div class="card border-0 shadow-sm rounded-4 p-4 bg-white h-100">
-            <h5 class="fw-bold text-navy mb-3 pb-2 border-bottom">
-                <i class="bi bi-trophy-fill text-warning me-2"></i> Top Read Stories
-            </h5>
-            <div class="d-flex flex-column gap-3">
-                <?php foreach ($top_news as $idx => $tn): ?>
-                    <div class="d-flex align-items-center gap-3">
-                        <span class="badge rounded-circle bg-light text-navy border fs-6 d-flex align-items-center justify-content-center" style="width: 32px; height: 32px;">
-                            <?php echo $idx + 1; ?>
-                        </span>
-                        <div class="flex-grow-1 overflow-hidden">
-                            <h6 class="mb-0 text-truncate" style="font-size: 0.88rem;">
-                                <a href="news/edit.php?id=<?php echo $tn['id']; ?>" class="text-navy text-decoration-none fw-semibold">
-                                    <?php echo htmlspecialchars($tn['title']); ?>
-                                </a>
-                            </h6>
-                            <small class="text-muted"><i class="bi bi-eye"></i> <?php echo number_format($tn['views']); ?> views</small>
-                        </div>
+                    <h3 class="fw-bold mb-1"><?php echo htmlspecialchars($user['name']); ?></h3>
+                    <div class="d-flex flex-wrap gap-2 align-items-center small text-light-subtle">
+                        <span><i class="bi bi-mortarboard-fill text-warning me-1"></i> <?php echo htmlspecialchars($user['faculty']); ?></span>
+                        <?php if (!empty($user['student_id'])): ?>
+                            <span>&bull;</span>
+                            <span><i class="bi bi-card-text me-1"></i> ID: <?php echo htmlspecialchars($user['student_id']); ?></span>
+                        <?php endif; ?>
+                        <span>&bull;</span>
+                        <span><i class="bi bi-envelope me-1"></i> <?php echo htmlspecialchars($user['email']); ?></span>
                     </div>
-                <?php endforeach; ?>
+                </div>
+            </div>
+            <div>
+                <a href="submit_article.php" class="btn btn-nsbm rounded-pill px-4 shadow">
+                    <i class="bi bi-plus-circle me-1"></i> Submit Article
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm rounded-4 p-3 h-100 border-start border-4 border-primary">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted small fw-semibold text-uppercase">Saved Articles</span>
+                        <h2 class="fw-bold text-navy mb-0"><?php echo $total_bookmarks; ?></h2>
+                    </div>
+                    <div class="bg-primary-subtle text-primary p-3 rounded-circle">
+                        <i class="bi bi-bookmark-fill fs-4"></i>
+                    </div>
+                </div>
+                <div class="mt-3 pt-2 border-top">
+                    <a href="bookmarks.php" class="small text-primary text-decoration-none fw-semibold">
+                        View Reading List <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm rounded-4 p-3 h-100 border-start border-4 border-success">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted small fw-semibold text-uppercase">My Submissions</span>
+                        <h2 class="fw-bold text-navy mb-0"><?php echo $total_submissions; ?></h2>
+                    </div>
+                    <div class="bg-success-subtle text-success p-3 rounded-circle">
+                        <i class="bi bi-journal-check fs-4"></i>
+                    </div>
+                </div>
+                <div class="mt-3 pt-2 border-top">
+                    <a href="my_submissions.php" class="small text-success text-decoration-none fw-semibold">
+                        Check Status & History <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card border-0 shadow-sm rounded-4 p-3 h-100 border-start border-4 border-warning">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-muted small fw-semibold text-uppercase">Subscribed Topics</span>
+                        <h2 class="fw-bold text-navy mb-0"><?php echo $total_subscriptions; ?></h2>
+                    </div>
+                    <div class="bg-warning-subtle text-warning p-3 rounded-circle">
+                        <i class="bi bi-bell-fill fs-4"></i>
+                    </div>
+                </div>
+                <div class="mt-3 pt-2 border-top">
+                    <a href="subscriptions.php" class="small text-warning-emphasis text-decoration-none fw-semibold">
+                        Manage Subscriptions <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+
+        <div class="col-lg-8">
+            <div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+                <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                    <h5 class="fw-bold text-navy mb-0">
+                        <i class="bi bi-rss-fill text-success me-2"></i> My Customized Feed
+                    </h5>
+                    <a href="subscriptions.php" class="small text-muted text-decoration-none">
+                        <i class="bi bi-sliders me-1"></i> Edit Topics
+                    </a>
+                </div>
+
+                <?php if (!empty($personalized_feed)): ?>
+                    <div class="row g-3">
+                        <?php foreach ($personalized_feed as $art): ?>
+                            <div class="col-md-6">
+                                <div class="news-card border rounded-3">
+                                    <div class="news-card-img-wrapper" style="height: 150px;">
+                                        <a href="../article.php?id=<?php echo $art['id']; ?>">
+                                            <img src="<?php echo get_image_url($art['image']); ?>" alt="<?php echo htmlspecialchars($art['title']); ?>" class="news-card-img" onerror="this.onerror=null;this.src='<?php echo get_image_url(''); ?>';">
+                                        </a>
+                                        <span class="position-absolute top-0 start-0 m-2 badge <?php echo get_category_badge($art['category_name']); ?> text-uppercase small">
+                                            <?php echo htmlspecialchars($art['category_name']); ?>
+                                        </span>
+                                    </div>
+                                    <div class="p-3 d-flex flex-column flex-grow-1">
+                                        <h6 class="fw-bold text-navy mb-2" style="font-size: 0.95rem; line-height: 1.3;">
+                                            <a href="../article.php?id=<?php echo $art['id']; ?>" class="text-navy text-decoration-none">
+                                                <?php echo htmlspecialchars($art['title']); ?>
+                                            </a>
+                                        </h6>
+                                        <div class="mt-auto text-muted small d-flex justify-content-between align-items-center pt-2 border-top">
+                                            <span><i class="bi bi-clock"></i> <?php echo format_date($art['created_at']); ?></span>
+                                            <a href="../article.php?id=<?php echo $art['id']; ?>" class="text-success text-decoration-none fw-semibold">Read &rarr;</a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="text-center py-5 text-muted">
+                        <i class="bi bi-bell-slash display-5 d-block mb-3 text-secondary"></i>
+                        <h6>No customized articles yet.</h6>
+                        <p class="small mb-3">You haven't subscribed to any categories or no stories were published in them yet.</p>
+                        <a href="subscriptions.php" class="btn btn-nsbm btn-sm rounded-pill px-4">Subscribe to Categories</a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+
+            <div class="card border-0 shadow-sm rounded-4 p-4 mb-4">
+                <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                    <h6 class="fw-bold text-navy mb-0">
+                        <i class="bi bi-file-earmark-text text-primary me-2"></i> Recent Submissions
+                    </h6>
+                    <a href="my_submissions.php" class="small text-muted text-decoration-none">All</a>
+                </div>
+
+                <?php if (!empty($recent_submissions)): ?>
+                    <ul class="list-unstyled mb-0">
+                        <?php foreach ($recent_submissions as $sub): ?>
+                            <li class="py-2 border-bottom">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="badge bg-light text-dark border small" style="font-size: 0.7rem;"><?php echo htmlspecialchars($sub['category_name']); ?></span>
+                                    <span class="badge bg-<?php echo ($sub['status'] === 'approved') ? 'success' : (($sub['status'] === 'rejected') ? 'danger' : 'warning text-dark'); ?>">
+                                        <?php echo ucfirst($sub['status']); ?>
+                                    </span>
+                                </div>
+                                <div class="fw-semibold small text-navy text-truncate"><?php echo htmlspecialchars($sub['title']); ?></div>
+                                <small class="text-muted"><i class="bi bi-calendar3"></i> <?php echo format_date($sub['submitted_at']); ?></small>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php else: ?>
+                    <p class="text-muted small mb-3">You have not submitted any club stories or announcements yet.</p>
+                    <a href="submit_article.php" class="btn btn-outline-success btn-sm w-100 rounded-pill">
+                        Submit a Story Now
+                    </a>
+                <?php endif; ?>
+            </div>
+
+            <div class="card border-0 shadow-sm rounded-4 p-4 account-shortcuts-card">
+                <h6 class="fw-bold mb-3 pb-2 border-bottom account-shortcuts-title">
+                    <i class="bi bi-gear-wide-connected text-success me-2"></i> Account Shortcuts
+                </h6>
+                <div class="d-flex flex-column gap-2">
+                    <a href="profile.php" class="btn btn-shortcut text-start py-2">
+                        <i class="bi bi-person-gear text-success me-2"></i> Edit Profile & Password
+                    </a>
+                    <a href="bookmarks.php" class="btn btn-shortcut text-start py-2">
+                        <i class="bi bi-bookmark text-primary me-2"></i> View Saved Articles
+                    </a>
+                    <a href="subscriptions.php" class="btn btn-shortcut text-start py-2">
+                        <i class="bi bi-bell text-warning me-2"></i> Notification Preferences
+                    </a>
+                    <a href="../logout.php" class="btn btn-shortcut-danger text-start py-2 mt-2">
+                        <i class="bi bi-box-arrow-right me-2"></i> Log Out of Account
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="card border-0 shadow-sm rounded-4 p-4 bg-white mb-4">
-    <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
-        <h5 class="fw-bold text-navy mb-0">
-            <i class="bi bi-file-earmark-diff text-warning me-2"></i> Student Submissions Awaiting Approval
-        </h5>
-        <a href="submissions/index.php" class="btn btn-outline-secondary btn-sm rounded-pill px-3">View Queue</a>
-    </div>
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>
 
-    <?php if (!empty($pending_list)): ?>
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Headline</th>
-                        <th>Student Author</th>
-                        <th>Category</th>
-                        <th>Submitted At</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($pending_list as $item): ?>
-                        <tr>
-                            <td>
-                                <span class="fw-semibold text-navy"><?php echo htmlspecialchars($item['title']); ?></span>
-                            </td>
-                            <td>
-                                <div><?php echo htmlspecialchars($item['student_name']); ?></div>
-                                <small class="text-muted"><?php echo htmlspecialchars($item['student_id'] ?? 'Student'); ?></small>
-                            </td>
-                            <td>
-                                <span class="badge bg-light text-dark border"><?php echo htmlspecialchars($item['category_name']); ?></span>
-                            </td>
-                            <td>
-                                <small class="text-muted"><?php echo format_date($item['submitted_at'], true); ?></small>
-                            </td>
-                            <td class="text-end">
-                                <a href="submissions/index.php?action=approve&id=<?php echo $item['id']; ?>" class="btn btn-sm btn-success rounded-pill px-3 me-1">
-                                    <i class="bi bi-check2"></i> Approve
-                                </a>
-                                <a href="submissions/index.php?action=reject&id=<?php echo $item['id']; ?>" class="btn btn-sm btn-outline-danger rounded-pill px-3">
-                                    <i class="bi bi-x"></i> Reject
-                                </a>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    <?php else: ?>
-        <div class="text-center py-4 text-muted">
-            <i class="bi bi-check-circle-fill text-success fs-3 d-block mb-2"></i>
-            <p class="mb-0 small">Great job! The student submission queue is completely clear.</p>
-        </div>
-    <?php endif; ?>
-</div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const statElements = {
-        publishedNews: document.querySelector('[data-dashboard-stat="publishedNews"]'),
-        totalViews: document.querySelector('[data-dashboard-stat="totalViews"]'),
-        pendingSubmissions: document.querySelector('[data-dashboard-stat="pendingSubmissions"]'),
-        registeredStudents: document.querySelector('[data-dashboard-stat="registeredStudents"]')
-    };
-    const numberFormatter = new Intl.NumberFormat();
-
-    async function refreshDashboardStats() {
-        try {
-            const response = await fetch('dashboard_stats.php', {
-                headers: { Accept: 'application/json' },
-                cache: 'no-store',
-                credentials: 'same-origin'
-            });
-
-            if (!response.ok) {
-                throw new Error('Dashboard stats request failed with status ' + response.status);
-            }
-
-            const stats = await response.json();
-            Object.keys(statElements).forEach(function (key) {
-                if (!Number.isSafeInteger(stats[key]) || stats[key] < 0) {
-                    throw new Error('Invalid dashboard stat received: ' + key);
-                }
-            });
-
-            Object.keys(statElements).forEach(function (key) {
-                if (statElements[key]) {
-                    statElements[key].textContent = numberFormatter.format(stats[key]);
-                }
-            });
-        } catch (error) {
-            console.error('Unable to refresh admin dashboard stats:', error);
-        } finally {
-            window.setTimeout(refreshDashboardStats, 15000);
-        }
-    }
-
-    refreshDashboardStats();
-});
-</script>
-
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const canvas = document.getElementById('categoryChart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-
-    function isDarkTheme() {
-        return document.documentElement.getAttribute('data-bs-theme') === 'dark';
-    }
-
-    function getChartThemeColors() {
-        const isDark = isDarkTheme();
-        return {
-            textColor: isDark ? '#e2e8f0' : '#1e293b',
-            gridColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
-            viewsBg: isDark ? 'rgba(16, 185, 129, 0.85)' : 'rgba(0, 135, 81, 0.85)',
-            viewsBorder: isDark ? '#34d399' : '#005f38',
-            articlesBg: isDark ? 'rgba(56, 189, 248, 0.85)' : 'rgba(30, 58, 138, 0.85)',
-            articlesBorder: isDark ? '#38bdf8' : '#1e3a8a'
-        };
-    }
-
-    let colors = getChartThemeColors();
-
-    const chartInstance = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: <?php echo json_encode($chart_labels); ?>,
-            datasets: [{
-                label: 'Readership Views',
-                data: <?php echo json_encode($chart_views); ?>,
-                backgroundColor: colors.viewsBg,
-                borderColor: colors.viewsBorder,
-                borderWidth: 1.5,
-                borderRadius: 6
-            }, {
-                label: 'Published Articles',
-                data: <?php echo json_encode($chart_articles); ?>,
-                backgroundColor: colors.articlesBg,
-                borderColor: colors.articlesBorder,
-                borderWidth: 1.5,
-                borderRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'top',
-                    labels: {
-                        color: colors.textColor,
-                        font: { weight: '600', size: 12 },
-                        padding: 16
-                    }
-                },
-                tooltip: {
-                    backgroundColor: isDarkTheme() ? '#0f172a' : '#1e293b',
-                    titleColor: '#ffffff',
-                    bodyColor: '#ffffff',
-                    borderColor: colors.gridColor,
-                    borderWidth: 1
-                }
-            },
-            scales: {
-                x: {
-                    ticks: {
-                        color: colors.textColor,
-                        font: { weight: '600', size: 11 }
-                    },
-                    grid: {
-                        color: colors.gridColor
-                    }
-                },
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                        color: colors.textColor,
-                        font: { weight: '600', size: 11 },
-                        precision: 0
-                    },
-                    grid: {
-                        color: colors.gridColor
-                    }
-                }
-            }
-        }
-    });
-
-    const observer = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-            if (mutation.attributeName === 'data-bs-theme') {
-                const newColors = getChartThemeColors();
-                chartInstance.data.datasets[0].backgroundColor = newColors.viewsBg;
-                chartInstance.data.datasets[0].borderColor = newColors.viewsBorder;
-                chartInstance.data.datasets[1].backgroundColor = newColors.articlesBg;
-                chartInstance.data.datasets[1].borderColor = newColors.articlesBorder;
-                chartInstance.options.plugins.legend.labels.color = newColors.textColor;
-                chartInstance.options.scales.x.ticks.color = newColors.textColor;
-                chartInstance.options.scales.x.grid.color = newColors.gridColor;
-                chartInstance.options.scales.y.ticks.color = newColors.textColor;
-                chartInstance.options.scales.y.grid.color = newColors.gridColor;
-                chartInstance.update('none');
-            }
-        });
-    });
-    observer.observe(document.documentElement, { attributes: true });
-});
-</script>
-
-<?php require_once __DIR__ . '/includes/admin_footer.php'; ?>
